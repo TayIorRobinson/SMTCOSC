@@ -10,10 +10,11 @@ IP address defaults to 127.0.0.1 if not provided, port provides to 3671 if not p
 
 ## Resonite Example 
 
-Paste this link into Resonite: `resrec:///U-TaylorRobinson/R-57d0881c-e528-4e41-970e-a11429eeab78`.
+`resrec:///U-TaylorRobinson/R-A317C669CE99B75E10A14E08BD7DB091661A551210E06D00513774087D015F49`
 
-You'll need to pull up your inspector and change the `HandlingUser` on the `OSC_Reciever` on the root `smtcosc` slot.
+The simple example shows all data you can recieve, but requires an inspector.
 
+There's also a full UI with controls, but is a little less good as a starting point if you want to build your own thing.
 
 ## Messages
 
@@ -44,8 +45,27 @@ You'll need to pull up your inspector and change the `HandlingUser` on the `OSC_
 | `/smtcosc/<appname>/timeline/minSeekTime`  | double    | The earliest timestamp which you can seek to.                                                                                                                                                                                                                                                       |
 
 
-## TODO:
- - [ ] Playback control support
- - [ ] Optimise!
-    - [ ] Duplicated data gets sent a lot
-    - [ ] Use OSC containers instead of sending each message separately.
+## Controls
+
+Any command with a first parameter that is `false` will be ignored. Otherwise, unless otherwise specified, sending a value of any type will perform the action.
+
+| Address                                   | Data type | Description/Example                                                                                                                                                 |
+|-------------------------------------------|-----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `/smtcosc/refresh`                        |           | Refreshes all sessions                                                                                                                                              |
+| `/smtcosc/<appname>/refresh`              |           | Refreshes a specific session                                                                                                                                        |
+| `/smtcosc/<appname>/playPause`            |           | Toggles playback                                                                                                                                                    | 
+| `/smtcosc/<appname>/play`                 |           | Starts playback                                                                                                                                                     | 
+| `/smtcosc/<appname>/pause`                |           | Pauses playback                                                                                                                                                     | 
+| `/smtcosc/<appname>/stop`                 |           | Stops playback                                                                                                                                                      |
+| `/smtcosc/<appname>/next`                 |           | Skips to the next media item                                                                                                                                        |
+| `/smtcosc/<appname>/prev`                 |           | Skips to the previous media item. Some applications may seek back to the start of the current media item when the current media item has been playing for some time |
+| `/smtcosc/<appname>/rewind`               |           | Rewinds playback                                                                                                                                                    |
+| `/smtcosc/<appname>/fastForward`          |           | Fast-forwards playback                                                                                                                                              | 
+| `/smtcosc/<appname>/record`               |           | Start recording                                                                                                                                                     |
+| `/smtcosc/<appname>/chUp                  |           | Switches to the next channel                                                                                                                                        |
+| `/smtcosc/<appname>/chDown`               |           | Switches to the previous channel                                                                                                                                    |
+| `/smtcosc/<appname>/shuffle`              | int       | Sets shuffle state. `0` - sequential playback, `1` - shuffled playback. Other values are ignored.                                                                   |
+| `/smtcosc/<appname>/repeatMode`           | string    | `None`, `Track, or `List`, other values are ignored.                                                                                                                |                                                                                                                                                                  
+| `/smtcosc/<appname>/rate`                 | double    | Sets playback rate. Values less than 0 are ignored.                                                                                                                 |
+| `/smtcosc/<appname>/seek`                 | long      | Seek to a specific position. Measured in ticks (1/1,000,000th second)                                                                                               |
+
