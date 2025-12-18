@@ -1,33 +1,37 @@
 ﻿using System.Net;
 using System.Net.Mime;
 using System.Net.Sockets;
+using Windows.Media;
 using Windows.Media.Control;
 using Windows.System;
 using CoreOSC;
 using CoreOSC.IO;
 
-var port = 3671;
+var dataPort = 3671;
+var ctrlPort = 3672;
 var ip = "127.0.0.1";
 try {
     if (args.Length == 0) { }
-    else if (args.Length == 1) {
-        port = Convert.ToInt32(args[0]);
-    } else if (args.Length == 2) {
+    else if (args.Length == 2) {
+        dataPort = Convert.ToInt32(args[0]);
+        ctrlPort = Convert.ToInt32(args[1]);
+    } else if (args.Length == 3) {
         ip = args[0];
-        port = Convert.ToInt32(args[1]);
+        dataPort = Convert.ToInt32(args[1]);
+        ctrlPort = Convert.ToInt32(args[2]);
     } else {
         throw new ArgumentException("Invalid amount of argments passed");
     }
 } catch (Exception e) {
     Console.Error.WriteLine("Usage: ");
-    Console.Error.WriteLine("    smtcosc.exe - Send data to " + ip + " on port " + port);
-    Console.Error.WriteLine("    smtcosc.exe 1337 - Send data to " + ip + " on port 1337");
-    Console.Error.WriteLine("    smtcosc.exe 192.168.1.1 1337 - Send data to 192.168.1.1 port 1337");
+    Console.Error.WriteLine("    smtcosc.exe - Send data to " + ip + " on port " + dataPort + ", receiving control messages on port " + ctrlPort);
+    Console.Error.WriteLine("    smtcosc.exe 1337 4200 - Send data to " + ip + " on port 1337, receiving control messages on port 4200");
+    Console.Error.WriteLine("    smtcosc.exe 192.168.1.1 1337 4200 - Send data to 192.168.1.1 port 1337, receiving control messages on port 4200");
 }
 
 GlobalSystemMediaTransportControlsSessionManager  gSMTCSM = await GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
-var socket = new UdpClient(ip, port);
-Console.WriteLine(" Sending data to " + ip + ":" + port);
+var socket = new UdpClient(ip, dataPort);
+Console.WriteLine("Sending data to " + ip + ":" + dataPort);
 
 SemaphoreSlim updateLock = new(1);
 HashSet<GlobalSystemMediaTransportControlsSession> watchedSessions = new();
@@ -47,7 +51,7 @@ async Task SendSessionMediaProperties(GlobalSystemMediaTransportControlsSession 
         await socket.SendMessageAsync(new OscMessage(new Address($"{prefix}/subtitle"), [properties.Subtitle]));
         await socket.SendMessageAsync(new OscMessage(new Address($"{prefix}/trackNumber"), [properties.TrackNumber]));
     } catch (Exception e) {
-        Console.WriteLine("Failed to read session media properties for " + app + ": " + e);
+        Console.Error.WriteLine("Failed to read session media properties for " + app + ": " + e);
     }
 }
 
@@ -65,7 +69,7 @@ async Task SendSessionPlaybackInfo(GlobalSystemMediaTransportControlsSession ses
         await socket.SendMessageAsync(new OscMessage(new Address($"{prefix}/status"), [info.PlaybackStatus.ToString()]));
         // todo: controls
     } catch (Exception e) {
-        Console.WriteLine("Failed to read session playback info for " + app + ": " + e);
+        Console.Error.WriteLine("Failed to read session playback info for " + app + ": " + e);
     }
 }
 async Task SendSessionTimelineProperties(GlobalSystemMediaTransportControlsSession session) {
@@ -80,7 +84,7 @@ async Task SendSessionTimelineProperties(GlobalSystemMediaTransportControlsSessi
         await socket.SendMessageAsync(new OscMessage(new Address($"{prefix}/startTime"), [info.StartTime.TotalSeconds]));
         await socket.SendMessageAsync(new OscMessage(new Address($"{prefix}/updated"), [info.LastUpdatedTime.ToUnixTimeMilliseconds()]));
     } catch (Exception e) {
-        Console.WriteLine("Failed to read session timeline info for " + app + ": " + e);
+        Console.Error.WriteLine("Failed to read session timeline info for " + app + ": " + e);
     }
 }
 
@@ -91,7 +95,7 @@ async Task RefreshSessions() {
         var activeSession = gSMTCSM.GetCurrentSession();
         await socket.SendMessageAsync(
             new OscMessage(new Address("/smtcosc/activeSession"),
-            [activeSession.SourceAppUserModelId])
+                [activeSession.SourceAppUserModelId])
         );
         var sessions = gSMTCSM.GetSessions();
         await socket.SendMessageAsync(
@@ -99,7 +103,7 @@ async Task RefreshSessions() {
                 String.Join("\n", sessions.Select(a => a.SourceAppUserModelId))
             ])
         );
-        
+
         foreach (var session in sessions) {
             await SendSessionMediaProperties(session);
             await SendSessionPlaybackInfo(session);
@@ -111,6 +115,9 @@ async Task RefreshSessions() {
             watchedSessions.Add(session);
         }
     }
+    catch (Exception e) {
+        Console.Error.WriteLine("Error in RefreshSessions " + e);
+    }
     finally {
         updateLock.Release();
     }
@@ -120,4 +127,94 @@ gSMTCSM.SessionsChanged += (sender, e) => RefreshSessions();
 gSMTCSM.CurrentSessionChanged += (sender, e) => RefreshSessions();
 await RefreshSessions();
 
-while (true) Thread.Sleep(100000);
+async Task HandleIncomingMessage(OscMessage oscMessage) {
+    Console.WriteLine("Received control message on: " + oscMessage.Address.Value);
+    var addr = oscMessage.Address.Value;
+    if (!addr.StartsWith("/smtcosc/")) return;
+    var param = oscMessage.Arguments.FirstOrDefault();
+    if (param is OscFalse) return;
+    
+    var split = addr.Split('/');
+    if (split.Length == 3) {
+        var command = split[2];
+        if (command == "refresh") await RefreshSessions();
+    }  else if (split.Length == 4) {
+        var appName = split[2];
+        var command = split[3];
+        var session = gSMTCSM.GetSessions().FirstOrDefault(a => a.SourceAppUserModelId == appName);
+        if (session is null) {
+            Console.Error.WriteLine("Session " + appName + " not found!");
+            return;
+        }
+
+        if (command == "refresh") {
+            await SendSessionMediaProperties(session);
+            await SendSessionPlaybackInfo(session);
+            await SendSessionTimelineProperties(session);
+        } else if (command == "playPause") {
+            await session.TryTogglePlayPauseAsync();
+        } else if (command == "stop") {
+            await session.TryStopAsync();
+        } else if (command == "prev") {
+            await session.TrySkipPreviousAsync();
+        } else if (command == "next") {
+            await session.TrySkipNextAsync();
+        } else if (command == "rewind") {
+            await session.TryRewindAsync();
+        } else if (command == "record") {
+            await session.TryRecordAsync();
+        } else if (command == "play") {
+            await session.TryPlayAsync();
+        } else if (command == "pause") {
+            await session.TryPauseAsync();
+        } else if (command == "fastForward") {
+            await session.TryFastForwardAsync();
+        } else if (command == "chUp") {
+            await session.TryChangeChannelUpAsync();
+        } else if (command == "chDown") {
+            await session.TryChangeChannelDownAsync();
+        } else if (command == "shuffle") {
+            var arg = (int)param;
+            if (arg == 0 || arg == 1)
+                await session.TryChangeShuffleActiveAsync(arg == 1);
+        } else if (command == "seek") {
+            var arg = (long)param;
+            if (arg >= 0)  await session.TryChangePlaybackPositionAsync(arg);
+        } else if (command == "rate") {
+            var arg = (double)param;
+            if (arg >= 0) await session.TryChangePlaybackRateAsync((double)param);
+        } else if (command == "repeatMode") {
+            var arg = (string)param;
+            if (arg == "List") await session.TryChangeAutoRepeatModeAsync(MediaPlaybackAutoRepeatMode.List);
+            else if (arg == "None") await session.TryChangeAutoRepeatModeAsync(MediaPlaybackAutoRepeatMode.None);
+            else if (arg == "Track") await session.TryChangeAutoRepeatModeAsync(MediaPlaybackAutoRepeatMode.Track);
+        }
+
+    }
+    
+}
+
+if (ctrlPort > 0) {
+    try {
+        using (var udpClient = new UdpClient()) {
+            udpClient.ExclusiveAddressUse = false;
+            udpClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            udpClient.Client.Bind(new IPEndPoint(IPAddress.Any, ctrlPort));
+            Console.WriteLine("Receiving control commands on " + ctrlPort);
+            while (true) {
+                var message = await udpClient.ReceiveMessageAsync();
+                try {
+                    await HandleIncomingMessage(message);
+                } catch (Exception e) {
+                    Console.Error.WriteLine("Error handling message: " + e);
+                }
+            }
+        }
+    }
+    catch (Exception e) {
+        Console.Error.WriteLine("Recieve failure " + e);
+    }
+}
+
+Console.WriteLine("Receiving is disabled.");
+while (true) await Task.Delay(10000);
