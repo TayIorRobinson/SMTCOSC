@@ -1,9 +1,7 @@
 ﻿using System.Net;
-using System.Net.Mime;
 using System.Net.Sockets;
 using Windows.Media;
 using Windows.Media.Control;
-using Windows.System;
 using CoreOSC;
 using CoreOSC.IO;
 
@@ -29,6 +27,22 @@ try {
     Console.Error.WriteLine("    smtcosc.exe 192.168.1.1 1337 4200 - Send data to 192.168.1.1 port 1337, receiving control messages on port 4200");
 }
 
+Dictionary<string, string> appNames = new Dictionary<string, string>();
+
+// windows is a cursed pile of legacy nightmares    
+try {
+    Console.WriteLine("Enumerating app names...");
+    var ShellComType = Type.GetTypeFromProgID("Shell.Application");
+    dynamic ShellApplication = Activator.CreateInstance(ShellComType);
+    var apps = ShellApplication.NameSpace("shell:::{4234d49b-0245-4df3-b780-3893943456e1}'").Items();
+    foreach (var app in apps) appNames.Add(app.Path, app.Name);
+    Console.WriteLine("Found " + appNames.Count + " apps");
+}
+catch (Exception e) {
+    Console.Error.WriteLine(e);
+}
+
+
 GlobalSystemMediaTransportControlsSessionManager  gSMTCSM = await GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
 var socket = new UdpClient(ip, dataPort);
 Console.WriteLine("Sending data to " + ip + ":" + dataPort);
@@ -53,6 +67,7 @@ async Task SendSessionMediaProperties(GlobalSystemMediaTransportControlsSession 
     } catch (Exception e) {
         Console.Error.WriteLine("Failed to read session media properties for " + app + ": " + e);
     }
+    await SendSessionAppInfo(session);
 }
 
 
@@ -89,6 +104,20 @@ async Task SendSessionTimelineProperties(GlobalSystemMediaTransportControlsSessi
 }
 
 
+async Task SendSessionAppInfo(GlobalSystemMediaTransportControlsSession session) {
+    var app = session.SourceAppUserModelId;
+    var prefix = "/smtcosc/" + app + "/app";
+    try {
+        if (appNames.TryGetValue(app, out var appName))
+            await socket.SendMessageAsync(new OscMessage(new Address($"{prefix}/name"), [appName]));
+    } catch (Exception e) {
+        Console.Error.WriteLine("Failed to read session app info for " + app + ": " + e);
+    }
+}
+
+
+
+
 async Task RefreshSessions() {
     await updateLock.WaitAsync();
     try {
@@ -108,6 +137,7 @@ async Task RefreshSessions() {
             await SendSessionMediaProperties(session);
             await SendSessionPlaybackInfo(session);
             await SendSessionTimelineProperties(session);
+            
             if (watchedSessions.Contains(session)) continue;
             session.MediaPropertiesChanged += (sender, e) => SendSessionMediaProperties(session);
             session.PlaybackInfoChanged += (sender, e) => SendSessionPlaybackInfo(session);
